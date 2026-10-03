@@ -1,0 +1,32 @@
+{
+  "name": "pi-openai-web-search",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Opt-in OpenAI hosted web search for Pi, with linked sources in saved answers.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi", "openai", "web-search"],
+  "files": ["extensions", "src", "README.md", "LICENSE"],
+  "pi": {
+    "extensions": ["./extensions/index.ts"]
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.1",
+    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
