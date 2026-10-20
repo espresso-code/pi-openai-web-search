@@ -71,15 +71,23 @@ unreviewed upstream changes. Use `--local` for project-only installation.
 
 | Control | Meaning |
 | --- | --- |
-| `/web-search on` | Enable on future eligible model requests. |
-| `/web-search off` | Stop adding search to future requests. |
+| `/web-search on` | Enable on future eligible model requests and save the preference. |
+| `/web-search off` | Stop adding search to future requests and save the preference. |
 | `/web-search status` | Report the toggle and connection eligibility. |
 | `/web-search` | Same as `status`; does not silently toggle. |
 | `--web-search` | Explicit process-scoped opt-in, also for print/JSON/RPC mode. |
 
-Search is **off by default**. Command-based opt-in is not saved in session history:
-startup, reload, session switching, and forks reset it. The CLI flag remains an
-opt-in for the process, including sessions opened within that process.
+Search is **off by default** until you save a preference. `/web-search on` and
+`/web-search off` persist across restarts, reloads, session switching, and forks.
+The user-wide preference is stored in `~/.pi/agent/openai-web-search.json` (or in
+`PI_CODING_AGENT_DIR` when set), not in session history, and applies across projects
+and modes, including print/JSON/RPC. Missing preferences default to off; unreadable
+or invalid preferences default to off with a UI warning. Save failures also show
+a UI warning while keeping the toggle effective for the current session.
+
+The CLI flag remains a temporary opt-in for the process, including sessions opened
+within that process, and does not overwrite the saved preference. A restored on
+setting is paused on unsupported connections and resumes on a supported one.
 
 Interactive Pi displays `Web search: on`, search progress, or a paused indicator
 when switching to an incompatible connection. Turning search off cannot recall a
@@ -160,7 +168,7 @@ npm run check
 
 Tests cover immutable request injection, connection checks, duplicate tools,
 citation event variants, safe Markdown links, source limits, search progress,
-consent reset, headless operation, cancellation cleanup, retries, and model
+preference persistence and error handling, headless operation, cancellation cleanup, retries, and model
 switches. Tests do not make network/model calls or require credentials.
 
 A manual acceptance check should also cover a real search with citations, a local

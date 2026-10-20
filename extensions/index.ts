@@ -1,4 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   appendSources,
   canUseWebSearch,
@@ -12,6 +15,7 @@ const ENABLE_NOTICE = "OpenAI web search enabled. Queries may contain conversati
 const INCOMPATIBLE_NOTICE = "Web search requires the openai provider, openai-responses API, and https://api.openai.com/v1 endpoint. Proxies, Codex, Azure, and Chat Completions are not enabled by this extension.";
 
 export default function openaiWebSearch(pi: ExtensionAPI): void {
+  const settingsPath = join(getAgentDir(), "openai-web-search.json");
   let enabled = false;
   let agentRunning = false;
   let request: { model: SearchModel; capture: SearchCapture } | undefined;
@@ -28,6 +32,19 @@ export default function openaiWebSearch(pi: ExtensionAPI): void {
 
   function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" = "info"): void {
     if (ctx.hasUI) ctx.ui.notify(message, type);
+  }
+
+  function savePreference(ctx: ExtensionContext): void {
+    const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`;
+    try {
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      writeFileSync(temporaryPath, JSON.stringify({ enabled }) + "\n", { mode: 0o600 });
+      renameSync(temporaryPath, settingsPath);
+    } catch {
+      notify(ctx, "Web search changed for this session, but the preference could not be saved.", "warning");
+    } finally {
+      try { rmSync(temporaryPath, { force: true }); } catch { /* Best-effort cleanup. */ }
+    }
   }
 
   pi.registerFlag("web-search", {
@@ -52,9 +69,11 @@ export default function openaiWebSearch(pi: ExtensionAPI): void {
           return;
         }
         enabled = true;
+        savePreference(ctx);
         notify(ctx, ENABLE_NOTICE, "warning");
       } else if (action === "off") {
         enabled = false;
+        savePreference(ctx);
         notify(ctx, "Web search disabled for future requests. A search already in progress cannot be recalled; tools added by other extensions are unaffected.");
       } else {
         notify(ctx, "Usage: /web-search on|off|status", "warning");
@@ -64,9 +83,22 @@ export default function openaiWebSearch(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (_event, ctx) => {
-    // Do not persist consent in session history. Reload/resume/new sessions reset
-    // the command toggle; the explicit CLI flag is process-scoped opt-in.
-    enabled = pi.getFlag("web-search") === true;
+    // Preferences are user-wide, not part of a conversation or its branches.
+    enabled = false;
+    try {
+      const settings: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+      if (typeof settings !== "object" || settings === null ||
+        typeof (settings as { enabled?: unknown }).enabled !== "boolean") {
+        throw new Error("Invalid web search preference");
+      }
+      enabled = (settings as { enabled: boolean }).enabled;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        notify(ctx, "Could not read the web search preference; defaulting to off.", "warning");
+      }
+    }
+    // The CLI opt-in does not overwrite the saved preference.
+    enabled = pi.getFlag("web-search") === true || enabled;
     agentRunning = false;
     request = undefined;
     if (enabled) notify(ctx, canUseWebSearch(ctx.model) ? ENABLE_NOTICE : INCOMPATIBLE_NOTICE, "warning");

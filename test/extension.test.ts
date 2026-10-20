@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const testDir = mkdtempSync(join(tmpdir(), "pi-web-search-"));
+after(() => rmSync(testDir, { recursive: true, force: true }));
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import extension from "../extensions/index.ts";
@@ -7,7 +13,7 @@ import { answer, citationEvent, model } from "./fixtures.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
-function harness({ flag = false, hasUI = true } = {}) {
+function harness({ flag = false, hasUI = true, agentDir = mkdtempSync(join(testDir, "agent-")) } = {}) {
   const handlers = new Map<string, Handler>();
   const statuses = new Map<string, string | undefined>();
   const notifications: string[] = [];
@@ -25,9 +31,16 @@ function harness({ flag = false, hasUI = true } = {}) {
     getFlag: () => flag,
     registerCommand: (_name: string, options: typeof command) => { command = options; },
   } as unknown as ExtensionAPI;
-  extension(api);
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    extension(api);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
   return {
-    ctx, statuses, notifications,
+    ctx, statuses, notifications, agentDir,
     emit: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
     command: (args: string) => command.handler(args, ctx),
     request: () => handlers.get("before_provider_request")?.({ payload: { model: model.id, stream: true, input: [] } }, ctx),
@@ -63,15 +76,52 @@ test("CLI flag enables search without UI or stdout logging", () => {
   assert.ok(result.message.content.some((block) => block.type === "text" && block.text.includes("### Web sources")));
 });
 
-test("reload, new, resume, and fork do not persist the command's consent", async () => {
+test("on and off survive restart, reload, new, resume, and fork", async () => {
+  let h = harness();
+  for (const enabled of [true, false]) {
+    await h.command(enabled ? "on" : "off");
+    assert.deepEqual(JSON.parse(readFileSync(join(h.agentDir, "openai-web-search.json"), "utf8")), { enabled });
+    h.emit("session_shutdown");
+    h = harness({ agentDir: h.agentDir });
+    for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+      h.emit("session_start", { reason });
+      h.emit("agent_start");
+      assert.equal(Boolean(h.request()), enabled);
+    }
+  }
+});
+
+test("CLI opt-in does not overwrite the saved preference", async () => {
+  const h = harness({ flag: true });
+  await h.command("off");
+  h.emit("session_start");
+  h.emit("agent_start");
+  assert.ok(h.request());
+  const restarted = harness({ agentDir: h.agentDir });
+  restarted.emit("session_start");
+  restarted.emit("agent_start");
+  assert.equal(restarted.request(), undefined);
+});
+
+test("invalid saved preferences default to off with a warning", () => {
   const h = harness();
-  for (const reason of ["reload", "new", "resume", "fork"]) {
-    await h.command("on");
-    h.emit("session_start", { reason });
+  for (const value of ["invalid JSON", "null", '{"enabled":"true"}']) {
+    writeFileSync(join(h.agentDir, "openai-web-search.json"), value);
+    h.emit("session_start");
     h.emit("agent_start");
     assert.equal(h.request(), undefined);
-    assert.equal(h.statuses.get("openai-web-search"), undefined);
+    assert.match(h.notifications.at(-1)!, /Could not read/);
   }
+});
+
+test("save failures warn without preventing the current toggle", async () => {
+  const h = harness();
+  rmSync(h.agentDir, { recursive: true });
+  writeFileSync(h.agentDir, "not a directory");
+  await h.command("on");
+  h.emit("agent_start");
+  assert.ok(h.request());
+  assert.ok(h.notifications.some((message) => message.includes("could not be saved")));
 });
 
 test("status and invalid commands never enable search", async () => {
